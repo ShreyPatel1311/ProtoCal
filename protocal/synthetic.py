@@ -65,9 +65,14 @@ def make_synthetic(spec: SyntheticSpec):
 
     # Material x protocol interaction, also gauge-fixed so that the entire
     # protocol contribution vanishes at the reference protocol.
+    # Drawn from a SEPARATE generator: taking these from `rng` shifted every
+    # downstream draw, so adding the interaction feature silently changed the
+    # base dataset (seed 0 went from 780 rows to 829) and the committed code
+    # no longer reproduced the committed results.
+    irng = np.random.default_rng(spec.seed + 10_000)
     r = spec.interaction_rank
-    U = rng.normal(0, 1.0, (spec.n_composition, r * spec.n_properties))
-    V = rng.normal(0, 1.0, (spec.n_protocol, r * spec.n_properties))
+    U = irng.normal(0, 1.0, (spec.n_composition, r * spec.n_properties))
+    V = irng.normal(0, 1.0, (spec.n_protocol, r * spec.n_properties))
 
     def inter_true(x: np.ndarray, p: np.ndarray) -> np.ndarray:
         if spec.interaction_scale == 0.0:

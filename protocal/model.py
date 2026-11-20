@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -97,19 +98,47 @@ class ProtoCal(nn.Module):
                 [cfg.n_protocol, *cfg.interaction_hidden, out_dim], dropout=0.0
             )
 
-        # Per-study offsets, one scalar per (study, property).
-        self.b = nn.Parameter(torch.zeros(cfg.n_studies, cfg.n_properties))
+        # Per-study offsets, one scalar per (study, property). Initialised at
+        # the prior scale, NOT at zero: with b == 0 the method-of-moments
+        # update tau^2 = mean(b^2) returns 0 on the first step, pinning tau to
+        # its floor and locking b at zero for the rest of training.
+        self.b = nn.Parameter(
+            torch.randn(cfg.n_studies, cfg.n_properties) * float(np.exp(cfg.init_log_tau))
+        )
         # Per-study heteroscedastic observation noise.
         self.log_noise = nn.Parameter(
             torch.full((cfg.n_studies, cfg.n_properties), cfg.init_log_noise)
         )
-        # Prior scale on b_s (empirical Bayes when learn_tau).
+        # Prior scale on b_s. Never a gradient parameter: it is set in closed
+        # form by update_tau() when cfg.learn_tau, else held fixed.
         self.log_tau = nn.Parameter(
-            torch.tensor(float(cfg.init_log_tau)), requires_grad=cfg.learn_tau
+            torch.tensor(float(cfg.init_log_tau)), requires_grad=False
         )
 
         # Reference protocol vector; g_proto is gauge-fixed to zero here.
         self.register_buffer("p_reference", torch.zeros(1, cfg.n_protocol))
+        # Total observed cells in the training set. The b_s prior must be
+        # normalised by this, NOT by the mini-batch size -- see loss().
+        self.register_buffer("total_n_obs", torch.tensor(0.0))
+
+    def set_total_n_obs(self, n: float) -> None:
+        """Record the training-set size used to normalise the b_s prior."""
+        self.total_n_obs = torch.tensor(float(n), device=self.total_n_obs.device)
+
+    @torch.no_grad()
+    def update_tau(self, floor: float = 1e-3) -> float:
+        """Closed-form empirical-Bayes update: tau^2 = mean(b^2).
+
+        The previous implementation minimised 0.5*b^2/tau^2 + k*log(tau)
+        jointly over b and tau by gradient descent. That objective is
+        unbounded below -- taking b = tau^{3/2} sends it to -inf as tau -> 0 --
+        so tau collapsed and b_s was crushed to ~1e-3 against a true scale of
+        0.35. The method-of-moments update is the standard fix and is what
+        makes the b_s recovery numbers meaningful.
+        """
+        tau2 = (self.b.detach() ** 2).mean().clamp(min=floor**2)
+        self.log_tau.copy_(0.5 * torch.log(tau2))
+        return float(tau2.sqrt())
 
     def set_reference_protocol(self, p_ref: torch.Tensor) -> None:
         """Define the protocol at which g_proto is pinned to zero."""
@@ -176,14 +205,20 @@ class ProtoCal(nn.Module):
         n_obs = mask.sum().clamp(min=1.0)
         nll = nll.sum() / n_obs
 
-        # Zero-mean Gaussian prior on the per-study offsets. Studies that appear
-        # in this batch only; tau is shared.
-        tau2 = torch.exp(2.0 * self.log_tau)
-        used = torch.unique(study)
-        b_used = self.b[used]
-        prior = 0.5 * (b_used**2 / tau2).sum() / n_obs
-        prior = prior + 0.5 * used.numel() * self.cfg.n_properties * (
-            2.0 * self.log_tau
-        ) / n_obs
+        # Zero-mean Gaussian prior on the per-study offsets.
+        #
+        # Two things here are load-bearing and were wrong before:
+        #  1. The prior covers ALL studies, not just those in this mini-batch,
+        #     and is normalised by the TOTAL number of observations, not the
+        #     batch's. Scoping it to the batch and dividing by the batch size
+        #     applied it once per batch, over-weighting it by the number of
+        #     batches per epoch -- which made the learned tau swing 334x with
+        #     batch size (0.0007 at bs=64 vs 0.2341 full-batch).
+        #  2. tau is NOT optimised here. It is set in closed form by
+        #     update_tau(); see the note there on why the joint objective was
+        #     unbounded below.
+        denom = self.total_n_obs if float(self.total_n_obs) > 0 else n_obs
+        tau2 = torch.exp(2.0 * self.log_tau).detach()
+        prior = 0.5 * (self.b**2 / tau2).sum() / denom
 
         return {"loss": nll + prior, "nll": nll, "prior": prior}

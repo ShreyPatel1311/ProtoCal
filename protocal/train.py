@@ -22,6 +22,7 @@ def train(
     batch_size: int = 256,
     lr: float = 3e-3,
     weight_decay_proto: float = 1e-2,
+    tau_warmup_frac: float = 0.3,
     device: str = "cpu",
     log_every: int = 50,
     verbose: bool = True,
@@ -51,6 +52,8 @@ def train(
     )
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
     loader = make_loader(data, batch_size)
+    # The b_s prior is normalised by the training-set size, not the batch size.
+    model.set_total_n_obs(float(data["mask"].sum()))
 
     history = []
     for epoch in range(epochs):
@@ -66,6 +69,13 @@ def train(
             tot += float(out["loss"]) * x.shape[0]
             n += x.shape[0]
         sched.step()
+        # Empirical-Bayes update for tau in closed form (method of moments).
+        # Doing this by gradient descent alongside b_s is what collapsed tau.
+        # Held back for a warmup period: updating from the initial b, before
+        # the data has moved it, drags tau toward its floor and the shrinkage
+        # then prevents b from ever escaping.
+        if model.cfg.learn_tau and epoch >= int(tau_warmup_frac * epochs):
+            model.update_tau()
         rec = {"epoch": epoch, "loss": tot / max(n, 1), "tau": float(model.log_tau.exp())}
         history.append(rec)
         if verbose and (epoch % log_every == 0 or epoch == epochs - 1):
