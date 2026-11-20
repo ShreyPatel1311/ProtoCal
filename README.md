@@ -26,6 +26,9 @@ open dataset has been audited. Two results already constrain the design — see
   protocol interaction is 1.42× measurement noise. A low-rank interaction term is needed.
 - **`b_s` is not recoverable** at literature data density (r ≈ 0.31); the per-study
   "data-quality signal" idea does not survive contact with the numbers.
+- **The low-rank interaction fix does not work either** (`interaction_rank`, default 0):
+  rank 2 scores 0.649 vs 0.649 held-out against the additive model. The interaction is
+  detectable in aggregate but not predictable from 4 protocol levels.
 
 ## Quick start
 

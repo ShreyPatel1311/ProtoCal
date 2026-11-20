@@ -41,6 +41,13 @@ class ProtoCalConfig:
     shared_hidden: tuple[int, ...] = (128, 128)
     proto_hidden: tuple[int, ...] = (16,)
     dropout: float = 0.1
+    # Rank of the material x protocol interaction term. 0 reproduces the
+    # purely additive model. The audit of the Lodz aging corpus showed the
+    # additive form is mis-specified for flexural strength, where the
+    # interaction is 1.42x within-group noise, so a small rank is the
+    # minimum correction -- not a capacity upgrade.
+    interaction_rank: int = 0
+    interaction_hidden: tuple[int, ...] = (32,)
     # Strength of the zero-mean prior on b_s. Learned (empirical Bayes) when
     # learn_tau is True; otherwise fixed at this value.
     init_log_tau: float = -1.0
@@ -75,6 +82,21 @@ class ProtoCal(nn.Module):
             [cfg.n_protocol, *cfg.proto_hidden, cfg.n_properties], dropout=0.0
         )
 
+        # Low-rank material x protocol interaction:
+        #     <u(x), v(p) - v(p_ref)>   summed over `interaction_rank` factors.
+        # Subtracting v(p_ref) keeps the whole model gauge-fixed: the full
+        # protocol contribution still vanishes at the reference protocol, so
+        # f_shared remains exactly the reference-protocol prediction.
+        self.rank = cfg.interaction_rank
+        if self.rank > 0:
+            out_dim = self.rank * cfg.n_properties
+            self.u_net = _mlp(
+                [cfg.n_composition, *cfg.interaction_hidden, out_dim], dropout=0.0
+            )
+            self.v_net = _mlp(
+                [cfg.n_protocol, *cfg.interaction_hidden, out_dim], dropout=0.0
+            )
+
         # Per-study offsets, one scalar per (study, property).
         self.b = nn.Parameter(torch.zeros(cfg.n_studies, cfg.n_properties))
         # Per-study heteroscedastic observation noise.
@@ -94,8 +116,24 @@ class ProtoCal(nn.Module):
         self.p_reference = p_ref.reshape(1, -1).to(self.p_reference.device).float()
 
     def protocol_effect(self, p: torch.Tensor) -> torch.Tensor:
-        """Gauge-fixed protocol correction: exactly zero at p_reference."""
+        """Gauge-fixed *shared* protocol correction: zero at p_reference.
+
+        This is the material-independent part only. The full protocol
+        contribution is this plus `interaction_effect`.
+        """
         return self.g_proto(p) - self.g_proto(self.p_reference)
+
+    def interaction_effect(self, x: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
+        """Material-dependent protocol response, gauge-fixed to zero at
+        p_reference. Returns zeros when interaction_rank == 0."""
+        if self.rank == 0:
+            return torch.zeros(
+                x.shape[0], self.cfg.n_properties, device=x.device, dtype=x.dtype
+            )
+        b, r, k = x.shape[0], self.rank, self.cfg.n_properties
+        u = self.u_net(x).view(b, r, k)
+        v = (self.v_net(p) - self.v_net(self.p_reference)).view(-1, r, k)
+        return (u * v).sum(dim=1)
 
     def forward(
         self,
@@ -105,7 +143,7 @@ class ProtoCal(nn.Module):
         *,
         include_study_offset: bool = True,
     ) -> torch.Tensor:
-        out = self.f_shared(x) + self.protocol_effect(p)
+        out = self.f_shared(x) + self.protocol_effect(p) + self.interaction_effect(x, p)
         if include_study_offset:
             out = out + self.b[study]
         return out

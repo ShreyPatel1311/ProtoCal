@@ -32,7 +32,13 @@ def train(
     of the identification strategy, not a tuning detail.
     """
     model = model.to(device)
+    # The interaction factors are part of the protocol side of the model and
+    # carry the same identification burden, so they share g_proto's heavier
+    # weight decay rather than f_shared's.
     proto_params = list(model.g_proto.parameters())
+    if getattr(model, "rank", 0) > 0:
+        proto_params += list(model.u_net.parameters())
+        proto_params += list(model.v_net.parameters())
     proto_ids = {id(p) for p in proto_params}
     other = [p for p in model.parameters() if id(p) not in proto_ids]
 

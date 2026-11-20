@@ -106,3 +106,47 @@ python scripts/smoke_test.py
 python scripts/density_sweep.py
 python scripts/capacity_sweep.py
 ```
+
+---
+
+## Finding 6 — the low-rank interaction fix does NOT work (negative result)
+
+Finding 2 showed the material × protocol interaction is real for flexural strength
+(1.42× noise). The obvious correction is a gauge-fixed low-rank interaction term,
+`g(p) + <u(x), v(p) − v(p_ref)>`. It is implemented (`ProtoCalConfig.interaction_rank`)
+and verified: the gauge fix holds for the interaction too, `|interaction(x, p_ref)| ≈ 1e-8`.
+
+It does not help. Tested by holding out entire (material, protocol) cells — predicting a
+combination nobody tested, which is exactly what harmonising scattered literature
+requires — over 8 random 25% splits of the Lodz corpus (432 specimens, 48 cells):
+
+| Rank | Held-out RMSE (std. units) | vs additive | Splits better |
+|---|---|---|---|
+| 0 (additive) | 0.649 ± 0.113 | — | — |
+| 1 | 0.685 ± — | −0.037 | 1/8 |
+| **2** | **0.649 ± 0.097** | **+0.0001** | **4/8** |
+| 3 | 0.681 ± — | −0.033 | 2/8 |
+
+Rank 2 is indistinguishable from additive; ranks 1 and 3 are worse.
+
+Per-property, the gains do track the measured interaction share — diametral tensile
++0.037, Vickers +0.033, flexural strength +0.010, all properties with substantial
+interaction — while flexural modulus, which has the *least* interaction (3.9%), gets
+**worse** by 0.097, consistent with the extra parameters just adding variance. So there
+is a directionally correct signal. But every one of these differences is far inside the
+split-to-split standard deviation (0.08–0.23). None is evidence of anything.
+
+**Why it fails.** The corpus has only 4 protocol levels and 48 cells. A low-rank
+interaction has to estimate a protocol factor space from that, and there is not enough
+of it. The interaction is detectable *in aggregate* by variance decomposition, which
+pools all specimens, but it is not *structured enough* to predict a new cell.
+
+This is the same pattern as Finding 3: a quantity that is clearly present in aggregate
+is not estimable well enough to use. Two independent instances of it now.
+
+**Consequence.** `interaction_rank` stays in the codebase, defaults to **0**, and is
+documented as unsupported by current evidence. Enabling it needs a corpus with many more
+protocol levels — which is precisely what a literature-derived dataset would provide,
+since published studies span far more than four aging regimes. The honest claim for a
+paper is: the additive model is measurably mis-specified for strength properties, and
+correcting it requires more protocol diversity than any single-laboratory study contains.

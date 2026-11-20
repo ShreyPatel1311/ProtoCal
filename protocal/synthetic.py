@@ -30,6 +30,12 @@ class SyntheticSpec:
     noise_scale: float = 0.18
     # Fraction of studies that reuse the exact reference protocol.
     frac_reference_protocol: float = 0.12
+    # Strength of a material x protocol interaction in the generating process.
+    # 0.0 reproduces the purely additive world the original model assumed; the
+    # real Lodz corpus shows a non-zero interaction for flexural strength, so
+    # the recovery check should be run at both settings.
+    interaction_scale: float = 0.0
+    interaction_rank: int = 2
     seed: int = 0
 
 
@@ -57,6 +63,19 @@ def make_synthetic(spec: SyntheticSpec):
     def g_true(p: np.ndarray) -> np.ndarray:
         return g_raw(p) - g_raw(p_ref)  # gauge-fixed, same as the model
 
+    # Material x protocol interaction, also gauge-fixed so that the entire
+    # protocol contribution vanishes at the reference protocol.
+    r = spec.interaction_rank
+    U = rng.normal(0, 1.0, (spec.n_composition, r * spec.n_properties))
+    V = rng.normal(0, 1.0, (spec.n_protocol, r * spec.n_properties))
+
+    def inter_true(x: np.ndarray, p: np.ndarray) -> np.ndarray:
+        if spec.interaction_scale == 0.0:
+            return np.zeros((x.shape[0], spec.n_properties))
+        u = np.tanh(x @ U).reshape(-1, r, spec.n_properties)
+        v = (np.tanh(p @ V) - np.tanh(p_ref @ V)).reshape(-1, r, spec.n_properties)
+        return spec.interaction_scale * (u * v).sum(1)
+
     # --- per-study protocols and offsets -----------------------------------
     protocols = rng.normal(0, 1.0, (spec.n_studies, spec.n_protocol))
     n_ref = max(1, int(spec.frac_reference_protocol * spec.n_studies))
@@ -72,7 +91,7 @@ def make_synthetic(spec: SyntheticSpec):
         n_rows = rng.integers(spec.min_rows_per_study, spec.max_rows_per_study + 1)
         x = rng.normal(0, 1.0, (n_rows, spec.n_composition))
         p = np.repeat(protocols[s : s + 1], n_rows, axis=0)  # one protocol per study
-        y = f_true(x) + g_true(p) + b_true[s]
+        y = f_true(x) + g_true(p) + inter_true(x, p) + b_true[s]
         y = y + rng.normal(0, noise_sd[s], y.shape)
         m = (rng.random(y.shape) < np.array(spec.report_prob)).astype(np.float32)
         # keep rows that report at least one property
@@ -94,6 +113,7 @@ def make_synthetic(spec: SyntheticSpec):
         "p_reference": torch.tensor(p_ref, dtype=torch.float32),
         "f_true": f_true,
         "g_true": g_true,
+        "inter_true": inter_true,
     }
     return data, truth
 
