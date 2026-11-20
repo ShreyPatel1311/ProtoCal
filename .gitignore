@@ -1,0 +1,15 @@
+.env
+secure_keys/
+results/
+logs/
+uploads/
+.venv/
+__pycache__/
+data/
+.env.tmp
+.env.*
+!.env.example
+output/*.json
+data_raw/
+data_work/
+*.pyc

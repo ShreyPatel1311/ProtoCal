@@ -1,0 +1,148 @@
+% ProtoCal -- manuscript boilerplate
+%
+% Target venues:
+%   1. arXiv (cs.LG / cond-mat.mtrl-sci) -- initial preprint
+%   2. AI for Science, IOP Publishing (ISSN 3050-287X), gold open access.
+%      Interdisciplinary, AI applied to scientific discovery. Submission via
+%      ScholarOne. CRediT contribution statement encouraged.
+%      https://iopscience.iop.org/journal/3050-287X/page/author-guidelines
+%   3. Materials Letters (Elsevier) -- short-format fallback. Strict limit
+%      (~2500 words / 4 printed pages incl. figures). If targeting this,
+%      cut to Findings 1 and 2 only and drop the synthetic-recovery section.
+%
+% Build: pdflatex main && bibtex main && pdflatex main && pdflatex main
+
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{natbib}
+
+\title{Protocol-Aware Hierarchical Modelling of Scattered Literature Data\\
+       for Dental Resin Composites}
+\author{Shrey Patel\thanks{Corresponding author.}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Machine learning for dental biomaterials is limited less by data volume than by
+uncontrolled heterogeneity: published studies differ in specimen geometry, storage
+medium, aging regime and curing protocol, and these nuisance factors are entangled with
+composition. We formulate a hierarchical model that conditions explicitly on reported
+protocol, gauge-fixed at a reference protocol so that the protocol term and per-study
+offsets are identifiable when each study reports under a single protocol. Using 1{,}802
+specimen-level measurements spanning 13 materials, 4 aging protocols and 5 properties,
+we show that protocol accounts for up to 32\% of variance in flexural strength and
+Vickers hardness. We further show, by variance decomposition, that an \emph{additive}
+protocol term is mis-specified for flexural strength, where the material\,$\times$\,protocol
+interaction exceeds measurement noise by a factor of 1.42. Finally, synthetic-recovery
+experiments establish that the shared protocol function is recoverable at realistic
+literature sparsity ($r \approx 0.95$) while per-study offsets are not ($r \approx 0.31$),
+bounding what can honestly be claimed from literature-derived corpora.
+\end{abstract}
+
+\section{Introduction}
+% Motivate: small, heterogeneous, inconsistently reported datasets are THE bottleneck.
+% Existing dental-composite ML pools multi-study tables and validates with random k-fold.
+% Cite Paniagua 2025; note no public literature-extracted dataset with protocol metadata.
+\textbf{[TODO]}
+
+\section{Related work}
+% - ML for dental composites: \citep{paniagua2025}
+% - active learning / BO for dental materials
+% - hierarchical / mixed-effects meta-analysis; domain generalisation (DANN)
+% - leave-one-cluster-out evaluation in materials informatics
+\textbf{[TODO]}
+
+\section{Method}
+For a property value $y$ of formulation $i$ reported by study $s$,
+\begin{equation}
+  y_{i,s} = f_{\text{shared}}(x_i) + g_{\text{proto}}(p_s) + b_s + \varepsilon_s ,
+  \label{eq:model}
+\end{equation}
+where $x_i$ is the composition/process vector, $p_s$ the protocol vector, $b_s$ a
+per-study offset under a learned $\mathcal{N}(0,\tau^2)$ prior and $\varepsilon_s$
+per-study heteroscedastic noise.
+
+\paragraph{Identifiability.}
+Because a study typically reports under one fixed protocol, $g_{\text{proto}}(p_s)$ and
+$b_s$ are both per-study additive constants and are not separable in isolation. We
+resolve this structurally rather than by assumption:
+\begin{enumerate}
+  \item \textbf{Gauge fixing.} We define
+        $\tilde g(p) = g(p) - g(p_{\text{ref}})$, so $\tilde g(p_{\text{ref}}) \equiv 0$
+        by construction, removing the additive ambiguity and making
+        $f_{\text{shared}}$ interpretable as the reference-protocol prediction.
+  \item \textbf{Asymmetric regularisation.} $g_{\text{proto}}$ is low-capacity, shared
+        across studies and heavily weight-decayed; $b_s$ is a free scalar per study
+        under strong shrinkage. Between-study variation explainable by observed
+        protocol covariates is therefore cheaper to place in $g_{\text{proto}}$.
+  \item \textbf{Synthetic recovery as a precondition.} Section~\ref{sec:recovery}.
+  \item \textbf{Leakage diagnostic.} Regressing fitted $b_s$ on $p_s$ post hoc;
+        $R^2 \approx 0$ confirms no protocol signal leaked into the offsets.
+\end{enumerate}
+
+\section{Data}
+\textbf{[TODO]} Lodz aging corpus (Zenodo 10.5281/zenodo.14576242, CC-BY-4.0):
+1{,}802 specimen measurements, 13 materials, 4 protocols, 5 properties, 238/260 cells
+(91.5\% complete factorial). Protocol encoded per file and parsed into medium, duration
+and temperature.
+
+\section{Results}
+
+\subsection{Protocol is a first-order effect}
+\begin{table}[h]\centering
+\begin{tabular}{lrrrr}
+\toprule
+Property & Material & Protocol & Interaction & Inter./noise \\
+\midrule
+Flexural strength   & 55.5\% & 31.2\% & 13.3\% & 1.42 \\
+Vickers hardness    & 49.1\% & 32.3\% & 18.5\% & 0.78 \\
+Diametral tensile   & 60.4\% & 19.8\% & 19.8\% & 0.51 \\
+Fracture toughness  & 79.5\% & 11.6\% &  8.9\% & 0.30 \\
+Flexural modulus    & 93.6\% &  2.5\% &  3.9\% & 0.23 \\
+\bottomrule
+\end{tabular}
+\caption{Variance decomposition on log values, material $\times$ protocol.}
+\label{tab:variance}
+\end{table}
+
+\subsection{The additive protocol term is mis-specified for strength}
+\textbf{[TODO]} Interaction exceeds within-group noise for flexural strength
+(1.42$\times$); propose low-rank interaction $g(p) + \langle u(x), v(p)\rangle$.
+
+\subsection{What is recoverable}
+\label{sec:recovery}
+\begin{table}[h]\centering
+\begin{tabular}{lrrr}
+\toprule
+Setting & Obs/(study,prop.) & $g_{\text{proto}}$ & $b_s$ \\
+\midrule
+Sparse (as published) &  6.2 & 0.951 & 0.313 \\
+$2\times$ rows        & 14.3 & 0.950 & 0.435 \\
+Full reporting        & 13.5 & 0.957 & 0.525 \\
+$4\times$ + full      & 59.4 & 0.968 & 0.558 \\
+\bottomrule
+\end{tabular}
+\caption{Synthetic recovery (Pearson $r$ against ground truth).}
+\label{tab:recovery}
+\end{table}
+
+\section{Limitations}
+Per-study offsets are not reliably estimable at literature density, so $b_s$ must not be
+read as a study-quality signal. The corpus analysed here is single-laboratory; the
+protocol axis is aging regime only, not curing or geometry. No patient-level data is
+used or required at any stage.
+
+\section{Conclusion}
+\textbf{[TODO]}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+\end{document}

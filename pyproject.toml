@@ -11,9 +11,11 @@ dependencies = [
     "flask>=3.1.0",
     "flask-socketio>=5.5.1",
     "frontend>=0.0.3",
-    "langsmith>=0.3.32",
+    # langsmith pin relaxed: ai2-scholar-qa pins langsmith==0.1.142 (upstream conflict)
     "loguru>=0.7.3",
     "openai>=1.0.0",
     "retry>=0.9.2",
     "tools>=0.1.9",
+    "openpyxl>=3.1.5",
+    "matplotlib>=3.11.2",
 ]

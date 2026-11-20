@@ -1,0 +1,43 @@
+Research goal: Propose a novel and genuinely feasible contribution at the intersection of artificial intelligence / machine learning and DENTAL BIOMATERIALS.
+
+HARD CONSTRAINT - NO PATIENT-LEVEL VALIDATION.
+The proposed work must be completable without any patient-level validation of any kind:
+- no clinical trials, no human-subject recruitment, no IRB/ethics-board patient protocol;
+- no patient records, no identifiable clinical images, no per-patient outcome data;
+- validation must come only from in vitro / benchtop experiments, physics-based or
+  molecular simulation, specimen-level (not patient-level) laboratory testing, and/or
+  already-public datasets and published literature.
+Any proposal whose central validation step requires patients is out of scope.
+
+FEASIBILITY CONSTRAINT.
+Executable by a single small academic lab in roughly 12 months, using standard
+dental materials-science equipment (universal testing machine, microtensile/shear
+bond-strength jigs, SEM, FTIR/Raman, XRD, profilometry, rheometer, thermocycler,
+pH-cycling and artificial-saliva aging setups, standard microbiology for biofilm
+assays) plus commodity compute (one or two GPUs). No new synchrotron time, no
+proprietary industrial datasets, no multi-site consortium.
+
+MATERIAL SCOPE (choose and justify a focus).
+Resin composites and their fillers; dental adhesives and bonding agents; glass-ionomer
+and bioactive/remineralizing cements; dental ceramics (zirconia, lithium disilicate);
+denture base and 3D-printing photopolymer resins; implant surface coatings and
+titanium surface treatments; antibacterial and regenerative/pulp-capping materials.
+
+PROPERTIES OF INTEREST.
+Mechanical (flexural/compressive strength, fracture toughness, modulus, wear),
+adhesive (micro-tensile/shear bond strength, durability after thermocycling),
+degradation and hydrolytic/enzymatic stability, polymerization shrinkage and
+degree of conversion, water sorption/solubility, monomer elution and cytotoxicity
+at the cell-culture level, ion release and remineralization capacity,
+antibacterial/anti-biofilm performance, optical properties and color stability,
+printability and dimensional accuracy for additive manufacturing.
+
+WHAT A STRONG OUTPUT LOOKS LIKE.
+Either (a) a novel AI/ML method that predicts, explains or inversely designs dental
+biomaterial formulations and their specimen-level properties - ideally addressing the
+real bottleneck in this field, which is small, heterogeneous, inconsistently reported
+datasets - or (b) a new, carefully constructed benchmark dataset plus baseline models
+that would let the community work on this problem at all. Methodological novelty must
+be real (not "apply a standard CNN to an existing dataset"), the data source must be
+concretely identified and actually obtainable, and the evaluation plan must be
+specimen-level with honest baselines and ablations.

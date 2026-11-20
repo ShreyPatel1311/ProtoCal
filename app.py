@@ -1256,7 +1256,9 @@ def execute_mcts_action(state, action):
                         detailed_reviews.append({
                             "aspect": aspect,
                             "score": score,
-                            "feedback": state.review_feedback[aspect]
+                            # key must be "summary": ideation._get_action_prompt
+                            # reads review.get("summary") when formatting feedback
+                            "summary": state.review_feedback[aspect],
                         })
             else:
                 detailed_reviews = []
@@ -1266,7 +1268,10 @@ def execute_mcts_action(state, action):
                 "review_and_refine",
                 {
                     "current_idea": state.current_idea,
-                    "reviews": detailed_reviews,
+                    # key must be "review_feedback": the prompt builder ignores
+                    # "reviews", which left REVIEW FEEDBACK empty on every
+                    # MCTS review_and_refine step
+                    "review_feedback": detailed_reviews,
                     "action_type": "execute"
                 }
             )

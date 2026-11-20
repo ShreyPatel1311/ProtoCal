@@ -1,74 +1,54 @@
-# 🌟 Interactive Research Ideation System
+# ProtoCal
 
-🎉 **Accepted to ACL 2025 System Demonstration Track!**
+**Protocol-aware hierarchical modelling for literature-scattered dental composite data.**
 
-Official repository for the paper <a href="https://arxiv.org/abs/2504.16728" target="_blank">IRIS: Interactive Research Ideation System</a>
+The bottleneck in ML for dental biomaterials is not data volume but *uncontrolled
+heterogeneity*: published studies differ in specimen geometry, storage medium, aging
+regime, crosshead speed and curing protocol. Pooling them naively confounds composition
+signal with protocol effects. ProtoCal models the protocol explicitly:
 
+```
+y_{i,s} = f_shared(x_i) + g_proto(p_s) + b_s + eps_s
+```
 
-![IRIS Diagram](assets/Diagram.png)
+with `g_proto` **gauge-fixed** to zero at a reference protocol, which is what makes the
+decomposition identifiable when each study reports under a single protocol.
 
-## 🔗 Setup
+## Status
 
-This project uses ```uv``` for package management, but you can use any virtual environment.
+Early. The model runs, the synthetic precondition check passes for `g_proto`, and a real
+open dataset has been audited. Two results already constrain the design — see
+[`output/DATA_AUDIT_FINDINGS.md`](output/DATA_AUDIT_FINDINGS.md):
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/Anikethh/IRIS-Interactive-Research-Ideation-System.git
-    cd IRIS-Interactive-Research-Ideation-System
-    ```
+- **Protocol explains up to 32%** of variance in flexural strength and Vickers hardness
+  across 1,802 specimen measurements — the premise holds.
+- **The additive `g_proto` is mis-specified for flexural strength**: the material ×
+  protocol interaction is 1.42× measurement noise. A low-rank interaction term is needed.
+- **`b_s` is not recoverable** at literature data density (r ≈ 0.31); the per-study
+  "data-quality signal" idea does not survive contact with the numbers.
 
-2.  **Activate virtual environment:**
-    ```bash
-    uv sync
-    source .venv/bin/activate 
-    ```
-
-3.  **Set Environment Variables:**
-    Setup your API keys:
-    ```bash
-    export SEMANTIC_SCHOLAR_API_KEY="your_semantic_scholar_api_key" 
-    export GEMINI_API_KEY="your_google_gemini_api_key" 
-    ```
-
-## 🖥️ Running the Application
-
-Ensure your virtual environment is activated, then run:
+## Quick start
 
 ```bash
-python app.py
+uv sync --python 3.12
+python scripts/download_data.py     # CC-BY datasets, MD5-verified
+python scripts/audit_data.py        # corpus audit + additivity test
+python scripts/smoke_test.py        # synthetic recovery, GPU
 ```
 
-![IRIS Interface](assets/Interface.png)
+## Layout
 
-## 📋 Requirements
+| Path | What |
+|---|---|
+| `protocal/model.py` | gauge-fixed hierarchical model |
+| `protocal/synthetic.py` | synthetic-recovery precondition check + leakage diagnostic |
+| `protocal/train.py` | training, grouped CV (leave-one-study/lab-out) |
+| `scripts/` | download, audit, distribution check, sweeps |
+| `output/` | generated reports and results |
+| `paper/` | manuscript |
 
-- Semantic Scholar API Key
--  LLM API Key for any provider supported by LiteLLM
+## Provenance
 
-## 📧 Cite
-```
-@inproceedings{garikaparthi-etal-2025-iris,
-    title = "{IRIS}: Interactive Research Ideation System for Accelerating Scientific Discovery",
-    author = "Garikaparthi, Aniketh  and
-      Patwardhan, Manasi  and
-      Vig, Lovekesh  and
-      Cohan, Arman",
-    editor = "Mishra, Pushkar  and
-      Muresan, Smaranda  and
-      Yu, Tao",
-    booktitle = "Proceedings of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 3: System Demonstrations)",
-    month = jul,
-    year = "2025",
-    address = "Vienna, Austria",
-    publisher = "Association for Computational Linguistics",
-    url = "https://aclanthology.org/2025.acl-demo.57/",
-    doi = "10.18653/v1/2025.acl-demo.57",
-    pages = "592--603",
-    ISBN = "979-8-89176-253-4",
-    abstract = "The rapid advancement in capabilities of large language models (LLMs) raises a pivotal question: How can LLMs accelerate scientific discovery? This work tackles the crucial first stage of research, generating novel hypotheses. While recent work on automated hypothesis generation focuses on multi-agent frameworks and extending test-time compute, none of the approaches effectively incorporate transparency and steerability through a synergistic Human-in-the-loop (HITL) approach. To address this gap, we introduce IRIS for interactive hypothesis generation, an open-source platform designed for researchers to leverage LLM-assisted scientific ideation. IRIS incorporates innovative features to enhance ideation, including adaptive test-time compute expansion via Monte Carlo Tree Search (MCTS), fine-grained feedback mechanism, and query-based literature synthesis. Designed to empower researchers with greater control and insight throughout the ideation process. We additionally conduct a user study with researchers across diverse disciplines, validating the effectiveness of our system in enhancing ideation. We open-source our code at https://github.com/Anikethh/IRIS-Interactive-Research-Ideation-System."
-}
-```
-
-## 📬 Contact
-
-For any questions or further information, please get in touch with aniketh.g@tcs.com
+This repository is derived from IRIS (ACL 2025 demo), which was used to generate the
+research idea. See [`NOTICE.md`](NOTICE.md) for attribution and licence status, and
+[`output/iris_run1_refined.md`](output/iris_run1_refined.md) for the generated proposal.
