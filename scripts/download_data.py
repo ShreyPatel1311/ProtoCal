@@ -15,11 +15,19 @@ from pathlib import Path
 
 RECORDS = {
     "23605867": "elokriti_bpa_free_resin",       # computational (MD)
-    "14576242": "aging_protocols_lodz",          # experimental, aging protocols
-    "5569184": "dualcure_vs_lightcure",          # experimental, 9 composites
+    "14576242": "aging_protocols_lodz",          # 12 materials x 4 protocols x 5 props
+    "13165877": "lodz_protocols_2024",           # 3 materials x SAME 4 protocols, + fatigue
+    "6865424": "lodz_hydrolytic_2022",           # experimental matrices + composites
+    "5569184": "dualcure_vs_lightcure",          # independent-ish study, 9 composites
     "11186969": "dental_sealants",               # experimental, OriginPro
     "6372935": "ceramic_brackets",               # experimental, brackets
 }
+
+# NOT fetchable here: Kruger et al. (Dryad doi:10.5061/dryad.68dq135, CC0) is an
+# INDEPENDENT laboratory with a storage-medium x incubation-time design. Dryad's
+# API requires a bearer token and the direct file stream returns 403, so it must
+# be downloaded by hand into data_raw/kruger_dryad/ from
+# https://datadryad.org/dataset/doi:10.5061/dryad.68dq135
 ROOT = Path(__file__).resolve().parent.parent / "data_raw"
 
 
