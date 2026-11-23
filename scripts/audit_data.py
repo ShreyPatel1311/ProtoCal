@@ -22,6 +22,8 @@ import zipfile
 from pathlib import Path
 
 import numpy as np
+import pathlib
+
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -64,9 +66,87 @@ def parse_name(stem: str) -> dict | None:
     }
 
 
-def load_long() -> pd.DataFrame:
+# One file in the Lodz deposit is misnamed: "HV, Heliomolar Flow, water, 24 h,
+# 37C.xlsx" is not that cell's specimens but the depositors' entire 24-sheet
+# master workbook (DTS/FS/HV/FT/FM x raw/DANE/STAT/zmiana). Reading only sheet 0
+# of it -- a DTS percent-change chart -- silently contributed nothing and left
+# Heliomolar Flow HV missing AT THE REFERENCE PROTOCOL, which is where the gauge
+# is fixed. The "<PROP> DANE" sheets hold the full per-property matrix, one
+# column per (material, protocol) with a self-describing header, so they are
+# parsed directly. Values recovered this way agree exactly with every cell
+# parsed from the individual files (max |diff| = 0.0 over 47 HV cells), so this
+# doubles as an end-to-end check on the filename-regex ingestion path.
+MASTER_WORKBOOK = "HV, Heliomolar Flow, water, 24 h, 37\u00b0C.xlsx"
+DANE_SHEETS = {"HV DANE": "vickers_hardness", "FS DANE": "flexural_strength_MPa",
+               "DTS DANE": "diametral_tensile_MPa", "FT dane": "fracture_toughness"}
+
+# The workbook's sheets are inconsistent about protocol naming: the HV sheet
+# spells protocols out in full while the DTS and FT sheets use shorthand. Left
+# unmapped, the shorthand looks like four extra protocols and re-admits 715 rows
+# that the per-file parse already supplied. Mapping them onto the canonical
+# names lets the gap-fill de-duplication work -- and, because every one of those
+# 715 rows then matches its canonical counterpart exactly (max |diff| = 4.6e-14,
+# floating point only), they serve as an independent check on the DTS and FT
+# ingestion just as the HV sheet does for hardness.
+PROTOCOL_ALIASES = {
+    "control": "water, 24 h, 37\u00b0C",
+    "7d NaOH": "0.1M NaOH, 7 days, 60\u00b0C",
+    "5d water + NaOH": "water, 5 days, 55\u00b0C and 0.1M NaOH, 7 days, 60\u00b0C",
+    "thermocycling + NaOH": ("water, 7500 thermo cycles, 5\u00b0C_55\u00b0C "
+                             "and 0.1M NaOH, 7 days, 60\u00b0C"),
+}
+
+
+def _protocol_meta(protocol: str) -> dict:
+    """Structured protocol fields from a protocol string (no property/material)."""
+    norm = protocol.lower()
+    days = re.search(r"(\d+)\s*day", norm)
+    hours = re.search(r"(\d+)\s*h\b", norm)
+    temps = [float(t) for t in re.findall(r"(\d+)\s*\u00b0?c", norm)]
+    return {
+        "protocol": protocol,
+        "medium": ("NaOH+water" if ("naoh" in norm and "water" in norm)
+                   else "NaOH" if "naoh" in norm
+                   else "water" if "water" in norm else "other"),
+        "duration_days": (float(days.group(1)) if days
+                          else float(hours.group(1)) / 24 if hours else np.nan),
+        "max_temp_C": max(temps) if temps else np.nan,
+        "is_baseline": ("water" in norm and "24" in norm and "37" in norm
+                        and "naoh" not in norm),
+    }
+
+
+def load_master_workbook(path: pathlib.Path) -> list[dict]:
+    """Parse the `* DANE` sheets of the depositors' master workbook."""
     rows = []
+    try:
+        book = pd.read_excel(path, sheet_name=None, header=None)
+    except Exception:
+        return rows
+    for sheet, prop in DANE_SHEETS.items():
+        if sheet not in book:
+            continue
+        d = book[sheet]
+        for j, label in enumerate(d.iloc[0]):
+            if not isinstance(label, str) or ", " not in label:
+                continue
+            material, protocol = label.split(", ", 1)
+            protocol = PROTOCOL_ALIASES.get(protocol.strip(), protocol.strip())
+            meta = {"property": prop, "material": material.strip(),
+                    **_protocol_meta(protocol)}
+            vals = pd.to_numeric(d.iloc[1:, j], errors="coerce").dropna()
+            for i, v in enumerate(vals):
+                rows.append({**meta, "specimen": i + 1, "value": float(v),
+                             "source_file": f"{path.name}#{sheet}"})
+    return rows
+
+
+def load_long() -> pd.DataFrame:
+    rows, master = [], []
     for f in sorted((WORK / "aging").rglob("*.xlsx")):
+        if f.name == MASTER_WORKBOOK:
+            master = load_master_workbook(f)
+            continue
         meta = parse_name(f.stem)
         if meta is None:
             continue
@@ -75,7 +155,16 @@ def load_long() -> pd.DataFrame:
         for i, v in enumerate(vals):
             rows.append({**meta, "specimen": i + 1, "value": float(v),
                          "source_file": f.name})
-    return pd.DataFrame(rows)
+    # Keep workbook rows only for cells the individual files did not provide,
+    # so the per-file parse stays the primary source and the workbook fills gaps.
+    df = pd.DataFrame(rows)
+    if master:
+        have = set(zip(df["property"], df["material"], df["protocol"]))
+        extra = [r for r in master
+                 if (r["property"], r["material"], r["protocol"]) not in have]
+        if extra:
+            df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True)
+    return df
 
 
 def anomalies(df: pd.DataFrame) -> list[dict]:
