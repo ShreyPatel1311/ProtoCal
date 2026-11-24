@@ -32,7 +32,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import alrahlah, composition, kruger, oz, randolph
+from . import alrahlah, composition, kruger, methods, oz, protocols, randolph
 from .stats import canonical_materials
 
 # Same physical product sold under different names in different markets.
@@ -41,74 +41,83 @@ PRODUCT_ALIASES = {
     "Tetric Evo Ceram": "Tetric EvoCeram",
 }
 
-# Protocol covariates, in a vocabulary wide enough to describe all five
-# laboratories' challenges. Reference = brief water storage at 37 C, which every
-# laboratory runs as its control, so the gauge is anchored in shared practice
-# rather than in one deposit's conventions.
-PROTO_FEATURES = [
-    "log_days",           # log1p(days) / log1p(180)
-    "temp_excess",        # (max temp - 37) / 23
-    "ethanol_frac",       # volume fraction of ethanol, 0 if none
-    "organic_solvent",    # MEK and similar non-aqueous solvents
-    "ph_deficit",         # max(0, 7 - pH) / 4, for citric/lactic acid
-    "alkaline",           # 0.1 M NaOH
-    "surface_treatment",  # prophylaxis paste / in-office bleaching
-]
+# Protocol covariates come from protocal.protocols, which parses a protocol as
+# an ordered sequence of steps. The previous inline encoding collapsed 46
+# (laboratory, protocol) pairs onto 32 distinct feature vectors, so 14
+# protocols were indistinguishable from another protocol -- including a
+# single-step alkaline challenge against a thermocycling-then-alkaline
+# sequence. See protocal.protocols for the full list and the reasoning.
+PROTO_FEATURES = protocols.FEATURES
 
-_REFERENCE = {f: 0.0 for f in PROTO_FEATURES}
-
-
-def _proto_vector(medium: str, days: float, temp_C: float) -> dict:
-    """Map a laboratory's protocol description onto the shared covariates."""
-    m = str(medium).lower()
-    v = dict(_REFERENCE)
-    v["log_days"] = float(np.log1p(max(days, 0.0)) / np.log1p(180.0))
-    v["temp_excess"] = float((np.nan_to_num(temp_C, nan=37.0) - 37.0) / 23.0)
-    if "ethanol" in m:
-        if "75" in m:
-            v["ethanol_frac"] = 0.75
-        elif "60" in m:
-            v["ethanol_frac"] = 0.60
-        elif "40" in m:
-            v["ethanol_frac"] = 0.40
-        else:
-            v["ethanol_frac"] = 0.75
-    if "ketone" in m or "mek" in m:
-        v["organic_solvent"] = 1.0
-    if "ph 3" in m:
-        v["ph_deficit"] = (7.0 - 3.0) / 4.0
-    elif "ph 5" in m:
-        v["ph_deficit"] = (7.0 - 5.0) / 4.0
-    if "naoh" in m:
-        v["alkaline"] = 1.0
-    if "paste" in m or "bleach" in m:
-        v["surface_treatment"] = 1.0
-    # thermocycling is thermal stress, not a medium; its temperature swing is
-    # already carried by temp_excess via the protocol's stated maximum
-    return v
+#: Measurement-method covariates. Constant within a laboratory, hence perfectly
+#: collinear with laboratory identity: they CANNOT serve as model features
+#: alongside a per-laboratory offset. Carried for the separate question of
+#: whether the fitted offsets are explained by method differences -- they are
+#: not (offset ~ log load gives r2 = 0.04, p = 0.79 over the four
+#: true-Vickers laboratories).
+METHOD_COLUMNS = ["load_gf", "dwell_s", "converted_from_martens",
+                  "dried_before_test"]
 
 
-def _filler_table() -> dict[str, float]:
-    """Filler wt% per product, preferring the manufacturer tables we trust most.
+def _encode_protocols(df: pd.DataFrame) -> pd.DataFrame:
+    """Feature block for each row's full protocol sequence."""
+    recs = [protocols.encode(r.protocol_text, days_override=r.days)
+            for r in df.itertuples()]
+    return pd.DataFrame(recs, index=df.index)
 
-    Precedence: the Lodz Table 2 descriptors, then Randolph, then Kruger, then
-    Alrahlah. Overlaps agree, so precedence only resolves which citation the
-    value carries. Nothing is invented: products with no disclosed filler
-    loading stay missing and are dropped by callers that need the feature.
+
+#: Filler loading disagrees between sources for exactly one product.
+#: Randolph determined inorganic content by thermogravimetric analysis, so that
+#: value is an ASH RESIDUE; Alrahlah quotes the manufacturer. Tetric EvoCeram
+#: contains prepolymerised filler, which a manufacturer figure may count as
+#: filler and a TGA residue will not, so the gap has a known cause rather than
+#: being a transcription error. Measured values take precedence, the conflict is
+#: flagged on every affected row, and `filler_variant="manufacturer"` refits with
+#: the other choice as a sensitivity check.
+FILLER_CONFLICTS = {
+    "Tetric EvoCeram": {"measured": 82.5, "manufacturer": 76.0,
+                        "reason": "prepolymerised filler counted differently by "
+                                  "TGA ash residue and manufacturer datasheet"},
+}
+
+#: Source precedence for filler loading. Measured (TGA/sedimentation) before
+#: manufacturer-reported, and the Lodz descriptor table before the rest only
+#: because it carries the citation we lean on elsewhere; the five products
+#: reported by more than one source and not listed in FILLER_CONFLICTS agree
+#: exactly, so precedence changes the citation, not the number.
+FILLER_PRECEDENCE = ("randolph", "lodz_table", "kruger", "alrahlah")
+
+
+def _filler_table(variant: str = "measured") -> dict[str, tuple[float, str]]:
+    """Filler wt% per product as {product: (value, source)}.
+
+    Products with no disclosed filler loading stay missing; nothing is invented.
+    Values the Lodz table had to impute from the wt%/vol% regression are
+    excluded, because an imputed composition feature would silently become a
+    predictor of its own imputation model.
     """
-    out: dict[str, float] = {}
+    by_src: dict[str, dict[str, float]] = {k: {} for k in FILLER_PRECEDENCE}
     ct = composition.composition_table()
     for r in ct.itertuples():
         if np.isfinite(r.filler_wt_pct) and not r.imputed_wt:
-            out[PRODUCT_ALIASES.get(r.material, r.material)] = float(r.filler_wt_pct)
-    for src in (randolph.load(), kruger.load(), alrahlah.load()):
+            by_src["lodz_table"][PRODUCT_ALIASES.get(r.material, r.material)] = \
+                float(r.filler_wt_pct)
+    for name, src in (("randolph", randolph.load()), ("kruger", kruger.load()),
+                      ("alrahlah", alrahlah.load())):
         if "filler_wt_pct" not in src:
             continue
         for m, g in src.groupby("material"):
             v = g["filler_wt_pct"].dropna()
-            key = PRODUCT_ALIASES.get(m, m)
-            if len(v) and key not in out:
-                out[key] = float(v.iloc[0])
+            if len(v):
+                by_src[name][PRODUCT_ALIASES.get(m, m)] = float(v.iloc[0])
+
+    out: dict[str, tuple[float, str]] = {}
+    for name in FILLER_PRECEDENCE:
+        for prod, val in by_src[name].items():
+            out.setdefault(prod, (val, name))
+    for prod, spec in FILLER_CONFLICTS.items():
+        if prod in out:
+            out[prod] = (float(spec[variant]), f"conflict:{variant}")
     return out
 
 
@@ -118,7 +127,13 @@ def _lodz() -> pd.DataFrame:
     g = df.groupby(["material", "protocol", "medium", "duration_days", "max_temp_C"])
     out = g["value"].agg(["mean", "std", "size"]).reset_index()
     out["study"] = "lodz_2025"
-    return out.rename(columns={"duration_days": "days", "max_temp_C": "temp_C"})
+    out = out.rename(columns={"duration_days": "days", "max_temp_C": "temp_C"})
+    # the deposit's protocol string spells out the whole sequence, including the
+    # thermocycling stage, so it is the authoritative description
+    out["protocol_text"] = out["protocol"]
+    out["days"] = [sum(st.days for st in protocols.parse(t))
+                   for t in out["protocol_text"]]
+    return out
 
 
 def _kruger() -> pd.DataFrame:
@@ -129,6 +144,11 @@ def _kruger() -> pd.DataFrame:
     out["temp_C"] = 37.0
     out["protocol"] = out["medium"] + ", " + out["days"].astype(int).astype(str) + " d"
     out["study"] = "kruger_2018"
+    # incubation time is a column here, not part of a label. Day 0 is the shared
+    # pre-storage baseline the paper measured once per composite.
+    out["protocol_text"] = np.where(
+        out["days"] == 0, "dry baseline, 0 days, 37C",
+        out["medium"] + ", " + out["days"].astype(int).astype(str) + " days, 37C")
     return out
 
 
@@ -142,6 +162,7 @@ def _randolph() -> pd.DataFrame:
         "material": r["material"], "medium": r["medium"], "days": r["days"],
         "temp_C": r["temp_C"], "mean": r["value"], "std": r["sd"], "size": 1,
         "protocol": r["protocol"], "study": "randolph_2016",
+        "protocol_text": r["medium"] + ", 7 days, 37C",
     })
 
 
@@ -157,6 +178,9 @@ def _alrahlah() -> pd.DataFrame:
         "material": a["material"], "medium": a["medium"], "days": a["days"],
         "temp_C": a["temp_C"], "mean": a["value"], "std": a["sd"], "size": a["n"],
         "protocol": a["protocol"], "study": "alrahlah_2013",
+        "protocol_text": np.where(
+            a["medium"] == "dry", "dry, 0 days, 23C",
+            a["medium"] + ", " + a["days"].astype(int).astype(str) + " days, 37C"),
     })
 
 
@@ -169,22 +193,62 @@ def _oz() -> pd.DataFrame:
         "material": o["material"], "medium": o["medium"], "days": o["days"],
         "temp_C": o["temp_C"], "mean": o["value"], "std": o["sd"], "size": o["n"],
         "protocol": o["protocol"], "study": "oz_2018",
+        # every group had 14 d water storage FIRST; the treatment is a second
+        # step, and the combined arm is two treatments genuinely in sequence
+        "protocol_text": np.where(
+            o["medium"] == "water", "water, 14 days, 37C",
+            "water, 14 days, 37C and " + o["medium"].str.replace("_", " ")),
     })
 
 
-def load(require_filler: bool = True) -> pd.DataFrame:
-    """One row per (laboratory, product, protocol) cell, with log-HV target."""
-    df = pd.concat([_lodz(), _kruger(), _randolph(), _alrahlah(), _oz()],
-                   ignore_index=True)
+def load(require_filler: bool = True, *, collapse_replicates: bool = True,
+         exclude_kruger: bool = False, filler_variant: str = "measured"
+         ) -> pd.DataFrame:
+    """One row per (laboratory, product, protocol) cell, with a log-HV target.
+
+    collapse_replicates
+        Alrahlah measured its dry baseline once inside each of three medium
+        blocks, so that cell appears three times per material. Those are
+        replicate measurements of ONE cell, not three cells: left in place they
+        triple that laboratory's weight on the dry protocol. Collapsing them is
+        the default; their spread is the within-laboratory repeatability and is
+        reported separately by `alrahlah.repeatability()`.
+    exclude_kruger
+        Kruger did not measure Vickers hardness. A Fischerscope HM 2000 measured
+        Martens hardness at 1 N and converted it to a Vickers-equivalent by an
+        undisclosed relation, and its specimens were dried under vacuum for 24 h
+        before testing -- which reverses the plasticisation that the other
+        laboratories were measuring. Every headline result should be reported
+        both ways.
+    """
+    frames = [_lodz(), _randolph(), _alrahlah(), _oz()]
+    if not exclude_kruger:
+        frames.insert(1, _kruger())
+    df = pd.concat(frames, ignore_index=True)
     df["product"] = df["material"].replace(PRODUCT_ALIASES)
+
+    if collapse_replicates:
+        keys = ["study", "product", "material", "protocol", "protocol_text",
+                "medium", "days", "temp_C"]
+        n_before = len(df)
+        agg = df.groupby(keys, dropna=False).agg(
+            mean=("mean", "mean"), std=("std", "mean"),
+            size=("size", "sum"), n_replicate_cells=("mean", "size"))
+        df = agg.reset_index()
+        df.attrs["collapsed_cells"] = n_before - len(df)
+
     df["log_hv"] = np.log(df["mean"])
+    df = df.reset_index(drop=True)
+    df = pd.concat([df, _encode_protocols(df)], axis=1)
+    meth = methods.table().set_index("study")
+    for c in METHOD_COLUMNS:
+        df[c] = df["study"].map(meth[c]).astype(float)
 
-    pf = pd.DataFrame([_proto_vector(r.medium, r.days, r.temp_C)
-                       for r in df.itertuples()])
-    df = pd.concat([df.reset_index(drop=True), pf], axis=1)
-
-    filler = _filler_table()
-    df["filler_wt_pct"] = df["product"].map(filler)
+    filler = _filler_table(filler_variant)
+    df["filler_wt_pct"] = df["product"].map(lambda p: filler.get(p, (np.nan,))[0])
+    df["filler_source"] = df["product"].map(
+        lambda p: filler.get(p, (np.nan, "none"))[1])
+    df["filler_conflict"] = df["product"].isin(FILLER_CONFLICTS)
     df["has_filler"] = df["filler_wt_pct"].notna()
     if require_filler:
         df = df[df["has_filler"]].copy()
