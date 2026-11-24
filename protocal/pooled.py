@@ -32,7 +32,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import alrahlah, composition, kruger, methods, oz, protocols, randolph
+from . import (alrahlah, composition, filler as filler_mod, kruger, methods,
+               oz, protocols, randolph)
 from .stats import canonical_materials
 
 # Same physical product sold under different names in different markets.
@@ -66,59 +67,15 @@ def _encode_protocols(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(recs, index=df.index)
 
 
-#: Filler loading disagrees between sources for exactly one product.
-#: Randolph determined inorganic content by thermogravimetric analysis, so that
-#: value is an ASH RESIDUE; Alrahlah quotes the manufacturer. Tetric EvoCeram
-#: contains prepolymerised filler, which a manufacturer figure may count as
-#: filler and a TGA residue will not, so the gap has a known cause rather than
-#: being a transcription error. Measured values take precedence, the conflict is
-#: flagged on every affected row, and `filler_variant="manufacturer"` refits with
-#: the other choice as a sensitivity check.
-FILLER_CONFLICTS = {
-    "Tetric EvoCeram": {"measured": 82.5, "manufacturer": 76.0,
-                        "reason": "prepolymerised filler counted differently by "
-                                  "TGA ash residue and manufacturer datasheet"},
-}
-
-#: Source precedence for filler loading. Measured (TGA/sedimentation) before
-#: manufacturer-reported, and the Lodz descriptor table before the rest only
-#: because it carries the citation we lean on elsewhere; the five products
-#: reported by more than one source and not listed in FILLER_CONFLICTS agree
-#: exactly, so precedence changes the citation, not the number.
-FILLER_PRECEDENCE = ("randolph", "lodz_table", "kruger", "alrahlah")
-
-
-def _filler_table(variant: str = "measured") -> dict[str, tuple[float, str]]:
-    """Filler wt% per product as {product: (value, source)}.
-
-    Products with no disclosed filler loading stay missing; nothing is invented.
-    Values the Lodz table had to impute from the wt%/vol% regression are
-    excluded, because an imputed composition feature would silently become a
-    predictor of its own imputation model.
-    """
-    by_src: dict[str, dict[str, float]] = {k: {} for k in FILLER_PRECEDENCE}
-    ct = composition.composition_table()
-    for r in ct.itertuples():
-        if np.isfinite(r.filler_wt_pct) and not r.imputed_wt:
-            by_src["lodz_table"][PRODUCT_ALIASES.get(r.material, r.material)] = \
-                float(r.filler_wt_pct)
-    for name, src in (("randolph", randolph.load()), ("kruger", kruger.load()),
-                      ("alrahlah", alrahlah.load())):
-        if "filler_wt_pct" not in src:
-            continue
-        for m, g in src.groupby("material"):
-            v = g["filler_wt_pct"].dropna()
-            if len(v):
-                by_src[name][PRODUCT_ALIASES.get(m, m)] = float(v.iloc[0])
-
-    out: dict[str, tuple[float, str]] = {}
-    for name in FILLER_PRECEDENCE:
-        for prod, val in by_src[name].items():
-            out.setdefault(prod, (val, name))
-    for prod, spec in FILLER_CONFLICTS.items():
-        if prod in out:
-            out[prod] = (float(spec[variant]), f"conflict:{variant}")
-    return out
+#: Filler provenance now lives in protocal.filler, which keeps the three
+#: distinct quantities apart: the manufacturer figure, Randolph's TGA inorganic
+#: residue W_i, and Randolph's acetone-insoluble W_total. An earlier version
+#: here recorded Randolph's 82.5 wt% for Tetric EvoCeram as MEASURED; it is the
+#: manufacturer figure, and the measured value is 70.5 wt%. The same mistake
+#: applied to every Randolph product -- see that module for the full table and
+#: for why variant="measured" introduces a definition/laboratory confound of
+#: its own.
+FILLER_VARIANTS = filler_mod.VARIANTS
 
 
 def _lodz() -> pd.DataFrame:
@@ -202,7 +159,8 @@ def _oz() -> pd.DataFrame:
 
 
 def load(require_filler: bool = True, *, collapse_replicates: bool = True,
-         exclude_kruger: bool = False, filler_variant: str = "measured"
+         exclude_kruger: bool = False,
+         filler_variant: str = "manufacturer"
          ) -> pd.DataFrame:
     """One row per (laboratory, product, protocol) cell, with a log-HV target.
 
@@ -244,11 +202,16 @@ def load(require_filler: bool = True, *, collapse_replicates: bool = True,
     for c in METHOD_COLUMNS:
         df[c] = df["study"].map(meth[c]).astype(float)
 
-    filler = _filler_table(filler_variant)
-    df["filler_wt_pct"] = df["product"].map(lambda p: filler.get(p, (np.nan,))[0])
-    df["filler_source"] = df["product"].map(
-        lambda p: filler.get(p, (np.nan, "none"))[1])
-    df["filler_conflict"] = df["product"].isin(FILLER_CONFLICTS)
+    ft = filler_mod.table(filler_variant, PRODUCT_ALIASES).set_index("product")
+    df["filler_wt_pct"] = df["product"].map(ft["filler_wt_pct"])
+    df["filler_source"] = df["product"].map(ft["filler_source"])
+    df["filler_definition"] = df["product"].map(ft["filler_definition"])
+    if "prepolymer_discrepant" in ft:
+        df["filler_prepolymer_discrepant"] = (
+            df["product"].map(ft["prepolymer_discrepant"]).astype("boolean")
+            .fillna(False).astype(bool))
+    else:
+        df["filler_prepolymer_discrepant"] = False
     df["has_filler"] = df["filler_wt_pct"].notna()
     if require_filler:
         df = df[df["has_filler"]].copy()
