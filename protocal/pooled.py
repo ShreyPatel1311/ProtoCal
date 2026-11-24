@@ -255,6 +255,43 @@ def load(require_filler: bool = True, *, collapse_replicates: bool = True,
     return df.reset_index(drop=True)
 
 
+#: Protocol features exercised by only ONE laboratory. When that laboratory is
+#: held out these features have no training support at all, so the model is
+#: extrapolating along a direction it has never seen. This is not a modelling
+#: choice to tune -- it is a property of the corpus, and it makes
+#: leave-one-laboratory-out ill-posed for the laboratories that own them.
+#:
+#:   alkaline, log_thermocycles   only lodz_2025     (33 and 11 of its 44 cells)
+#:   ph_deficit, chelating_acid,
+#:   saliva                       only kruger_2018
+#:   organic_solvent              only alrahlah_2013
+#:   abrasive, oxidative          only oz_2018
+#:
+#: The earlier colliding encoding hid this: it collapsed Lodz's alkaline
+#: protocols onto vectors shared with other laboratories, so held-out Lodz got a
+#: flatteringly low error (0.417) from inputs that were simply wrong. With the
+#: protocols correctly distinguished the same split gives 1.163, which is the
+#: honest number for extrapolating to an unseen protocol family.
+SINGLE_LAB_FEATURES = ("log_thermocycles", "organic_solvent", "ph_deficit",
+                       "chelating_acid", "alkaline", "saliva", "abrasive",
+                       "oxidative")
+
+#: Features defining the one protocol family every laboratory shares: immersion
+#: in water or aqueous ethanol, with no acid, alkali, saliva, organic solvent,
+#: thermocycling or surface treatment. 103 cells over 29 products and all five
+#: laboratories, retaining all six anchor products -- the only subcorpus on
+#: which cross-laboratory protocol transfer is a well-posed question.
+AQUEOUS_FAMILY_EXCLUDE = SINGLE_LAB_FEATURES
+
+
+def aqueous_family(df: pd.DataFrame) -> pd.DataFrame:
+    """Restrict to the shared water / aqueous-ethanol protocol family."""
+    keep = np.ones(len(df), bool)
+    for f in AQUEOUS_FAMILY_EXCLUDE:
+        keep &= (df[f].to_numpy(float) == 0.0)
+    return df[keep].copy().reset_index(drop=True)
+
+
 def anchors(df: pd.DataFrame) -> pd.DataFrame:
     """Products measured by more than one laboratory: the offset-bearing edges."""
     n = df.groupby("product")["study"].nunique()

@@ -155,9 +155,15 @@ def run(df: pd.DataFrame, label: str) -> dict:
 
 def main() -> int:
     res = {}
-    for label, kw in [("all_five_labs", {}),
-                      ("excl_kruger_true_vickers_only", {"exclude_kruger": True})]:
-        res[label] = run(pooled.load(**kw), label)
+    for label, kw, restrict in [
+            ("all_five_labs", {}, False),
+            ("excl_kruger_true_vickers_only", {"exclude_kruger": True}, False),
+            ("aqueous_ethanol_family_only", {}, True),
+            ("aqueous_family_excl_kruger", {"exclude_kruger": True}, True)]:
+        df = pooled.load(**kw)
+        if restrict:
+            df = pooled.aqueous_family(df)
+        res[label] = run(df, label)
 
     print(f"\n{'='*86}\nSINGLE-ANCHOR DETAIL (all five labs): which product you pick "
           f"decides the outcome\n{'='*86}")
